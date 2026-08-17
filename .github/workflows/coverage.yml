@@ -1,0 +1,130 @@
+name: Code coverage
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ scylla-4.*x ]
+    paths-ignore:
+      - "docs/**"
+      - .github/workflows/docs-pages.yml
+      - .github/workflows/docs-pr.yml
+      - .github/workflows/release.yml
+      - "*.md"
+      - "*.sh"
+      - "renovate.json"
+      - ".snyk"
+      - ".gitignore"
+  pull_request:
+    branches: [ scylla-4.*x ]
+    paths-ignore:
+      - "docs/**"
+      - .github/workflows/docs-pages.yml
+      - .github/workflows/docs-pr.yml
+      - .github/workflows/release.yml
+      - "*.md"
+      - "*.sh"
+      - "renovate.json"
+      - ".snyk"
+      - ".gitignore"
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: Measure code coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          java-version: 17
+          distribution: 'temurin'
+
+      - name: Restore maven repository cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-17-maven-${{ hashFiles('**/pom.xml') }}
+
+      - name: Setup Python 3
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      # From here on, every step uses `if: always()`: a failing test must not
+      # skip the integration suite or report generation -- a broken test
+      # would otherwise leave no coverage output at all to diagnose it with.
+      # test-unit-coverage (rather than test-unit) tests each module as its
+      # own `mvn` invocation for the same reason: in one reactor-wide `mvn
+      # test`, a failure in core would make Maven skip every module that
+      # depends on it too, losing their coverage data along with core's own.
+      - name: Run unit tests with coverage
+        if: always()
+        run: make test-unit-coverage
+
+      - name: Install ScyllaDB CCM
+        if: always()
+        run: make install-scylla-ccm
+
+      - name: Get scylla version
+        id: scylla-version
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make resolve-scylla-version
+
+      - name: Pull CCM image from the cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: always()
+        id: ccm-cache
+        with:
+          path: ~/.ccm/scylla-repository
+          key: ccm-scylla-${{ runner.os }}-${{ steps.scylla-version.outputs.value }}
+
+      - name: Download Scylla (${{ steps.scylla-version.outputs.value }}) image
+        if: always() && steps.ccm-cache.outputs.cache-hit != 'true'
+        env:
+          SCYLLA_VERSION_RESOLVED: ${{ steps.scylla-version.outputs.value }}
+        run: make download-scylla
+
+      - name: Save CCM image into the cache
+        if: always() && steps.ccm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.ccm/scylla-repository
+          key: ccm-scylla-${{ runner.os }}-${{ steps.scylla-version.outputs.value }}
+
+      - name: Run integration tests with coverage
+        if: always()
+        env:
+          SCYLLA_VERSION_RESOLVED: ${{ steps.scylla-version.outputs.value }}
+        run: make test-integration-scylla
+
+      - name: Generate coverage report
+        if: always()
+        run: make coverage-report MVNCMD="mvn -B -ntp"
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          {
+            echo '## Coverage report'
+            echo '```'
+            awk -F, 'NR>1 {missed+=$8; covered+=$9} END {total=missed+covered; if (total>0) printf "Line coverage: %d/%d (%.1f%%)\n", covered, total, 100*covered/total; else print "No coverage data"}' coverage-report/target/site/jacoco-aggregate/jacoco.csv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          path: coverage-report/target/site/jacoco-aggregate

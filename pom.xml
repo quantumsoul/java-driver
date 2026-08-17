@@ -50,6 +50,7 @@
     <module>distribution-tests</module>
     <module>examples</module>
     <module>bom</module>
+    <module>coverage-report</module>
   </modules>
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -712,7 +713,7 @@
         <extensions>true</extensions>
         <configuration>
           <publishingServerId>central</publishingServerId>
-          <excludeArtifacts>java-driver-distribution-source,java-driver-distribution-tests,java-driver-distribution,java-driver-examples,java-driver-integration-tests,java-driver-osgi-tests</excludeArtifacts>
+          <excludeArtifacts>java-driver-distribution-source,java-driver-distribution-tests,java-driver-distribution,java-driver-examples,java-driver-integration-tests,java-driver-osgi-tests,java-driver-coverage-report</excludeArtifacts>
           <autoPublish>${release.autopublish}</autoPublish>
           <waitUntil>validated</waitUntil>
         </configuration>

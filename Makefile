@@ -257,6 +257,27 @@ fix:
 test-unit: .install-guava-shaded
 	$(MVNCMD) test -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true
 
+# Modules with real unit tests. Kept as an explicit list (rather than e.g.
+# "every module but X") since test-unit-coverage below relies on it precisely
+# to sidestep Maven's reactor dependency rules.
+UNIT_TEST_MODULES := core query-builder mapper-runtime mapper-processor metrics/micrometer metrics/microprofile
+
+# Unlike test-unit, this tests each module as its own `mvn` invocation instead
+# of one reactor-wide `mvn test`. That matters here specifically: in a single
+# reactor build, if core's tests fail, Maven skips every module that depends
+# on core (query-builder, mapper-runtime, ...) *regardless* of -fae/-fn --
+# those flags only rescue independent modules, not ones with a real
+# dependency on the failed one. Testing each module separately, against
+# core's already-installed (.install-all-modules) artifact, means one
+# module's test failure can only cost that module's own coverage data, not
+# every other module's too.
+test-unit-coverage: .install-all-modules
+	@status=0
+	for module in $(UNIT_TEST_MODULES); do
+		$(MVNCMD) test -pl $$module -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true || status=1
+	done
+	exit $$status
+
 test-integration-scylla: .install-all-modules .prepare-scylla-ccm resolve-scylla-version .prepare-environment-update-aio-max-nr
 	@if [[ -z "$${SCYLLA_VERSION_RESOLVED}" ]]; then
 		SCYLLA_VERSION_RESOLVED=`cat '${SCYLLA_VERSION_FILE}'`
@@ -276,6 +297,24 @@ test-integration-cassandra: .install-all-modules .prepare-scylla-ccm resolve-cas
 		exit 1
 	fi
 	mvn -B -e verify -pl integration-tests -Dccm.version=$${CASSANDRA_VERSION_RESOLVED} -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true $(MAVEN_EXTRA_ARGS)
+
+# jacoco-maven-plugin's prepare-agent/report executions (bound repo-wide by the
+# parent pom) already instrument test-unit/test-integration-* runs -- run
+# whichever of those you want measured first, then this to merge and render
+# them. It rebuilds the reactor (-am) to resolve coverage-report's
+# dependencies, but -DskipTests means that rebuild does not re-run (or
+# overwrite the coverage data from) any module's tests.
+#
+# .PHONY here (unlike the rest of this file) because these target names
+# collide with real paths -- coverage-report/ is the module's own directory --
+# so make would otherwise treat the target as already up to date and skip it.
+.PHONY: coverage-report clean-coverage
+coverage-report:
+	$(MVNCMD) verify -pl coverage-report -am -DskipTests -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true
+
+clean-coverage:
+	find . -name jacoco.exec -delete
+	rm -rf coverage-report/target/site
 
 check-no-compile-warnings:
 	@$(MAKE) compile-all | grep WARNING >/tmp/all-compile-warnings.log || true

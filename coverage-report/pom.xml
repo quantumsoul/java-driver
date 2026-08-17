@@ -19,7 +19,7 @@
 
 -->
 <!--
-    Copyright (C) 2025 ScyllaDB
+    Copyright (C) 2026 ScyllaDB
 
     Modified by ScyllaDB
 -->
@@ -30,79 +30,71 @@
     <artifactId>java-driver-parent</artifactId>
     <version>4.19.2.1-SNAPSHOT</version>
   </parent>
-  <artifactId>java-driver-distribution-tests</artifactId>
-  <name>Scylla Java Driver - distribution tests</name>
+  <artifactId>java-driver-coverage-report</artifactId>
+  <packaging>pom</packaging>
+  <name>Java driver for Scylla and Apache Cassandra(R) - coverage report</name>
+  <!--
+      Not a real artifact: this module exists only to run jacoco:report-aggregate
+      over its dependencies below. The parent pom's default prepare-agent/report
+      executions are disabled below (not via jacoco.skip, which would also
+      disable report-aggregate itself) since this module has no tests or
+      classes of its own for them to act on.
+  -->
   <dependencies>
     <dependency>
       <groupId>com.scylladb</groupId>
-      <artifactId>java-driver-test-infra</artifactId>
-      <scope>test</scope>
+      <artifactId>java-driver-core</artifactId>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-query-builder</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.scylladb</groupId>
-      <artifactId>java-driver-mapper-processor</artifactId>
-      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-mapper-runtime</artifactId>
-      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
-      <artifactId>java-driver-core</artifactId>
-      <scope>test</scope>
+      <artifactId>java-driver-mapper-processor</artifactId>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-metrics-micrometer</artifactId>
-      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-metrics-microprofile</artifactId>
-      <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <scope>test</scope>
+      <groupId>com.scylladb</groupId>
+      <artifactId>java-driver-integration-tests</artifactId>
+      <version>${project.version}</version>
     </dependency>
   </dependencies>
   <build>
     <plugins>
       <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <configuration>
-          <jvm>${testing.jvm}/bin/java</jvm>
-          <argLine>@{argLine} ${mockitoopens.argline}</argLine>
-          <threadCount>1</threadCount>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.revapi</groupId>
-        <artifactId>revapi-maven-plugin</artifactId>
-        <configuration>
-          <skip>true</skip>
-        </configuration>
-      </plugin>
-      <plugin>
-        <artifactId>maven-install-plugin</artifactId>
-        <configuration>
-          <skip>true</skip>
-        </configuration>
-      </plugin>
-      <plugin>
-        <artifactId>maven-deploy-plugin</artifactId>
-        <configuration>
-          <skip>true</skip>
-        </configuration>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <!-- Override the parent's default prepare-agent/report executions: this
+               module has nothing of its own for them to do. -->
+          <execution>
+            <id>default</id>
+            <phase>none</phase>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>none</phase>
+          </execution>
+          <execution>
+            <id>report-aggregate</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report-aggregate</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
