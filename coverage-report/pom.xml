@@ -39,18 +39,6 @@
       executions are disabled below (not via jacoco.skip, which would also
       disable report-aggregate itself) since this module has no tests or
       classes of its own for them to act on.
-
-      scope=compile is explicit on mapper-runtime/mapper-processor/metrics-*
-      below because the root pom's dependencyManagement pins them to
-      scope=test (correct for their other consumers, like integration-tests,
-      which only need them for testing); report-aggregate only aggregates
-      compile/runtime-scoped reactor dependencies, so without this override
-      these 4 modules' classes are silently excluded from the aggregate
-      report even though their jacoco.exec data is loaded (confirmed by
-      comparing the loaded-execution-data-file log lines against the
-      Analyzed-bundle log lines: all 7 files load, only 3 modules get
-      analyzed). That's real, substantial coverage lost from these modules'
-      own integration tests (MicrometerMetricsIT, MicroProfileMetricsIT).
   -->
   <dependencies>
     <dependency>
@@ -64,22 +52,18 @@
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-mapper-runtime</artifactId>
-      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-mapper-processor</artifactId>
-      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-metrics-micrometer</artifactId>
-      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
       <artifactId>java-driver-metrics-microprofile</artifactId>
-      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.scylladb</groupId>
