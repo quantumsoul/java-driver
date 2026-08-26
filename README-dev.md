@@ -29,37 +29,46 @@ Most day-to-day tasks are wrapped in the top-level `Makefile` so you do not have
 
 ### Measuring code coverage
 
-`jacoco-maven-plugin` is already wired into every module (see the root `pom.xml`), so
-`test-unit`/`test-integration-*` collect coverage data as a side effect of running normally --
-each module writes its own `target/jacoco.exec`. What's missing without the targets below is a
-combined, cross-module view (e.g. attributing coverage `core` gets *through* the integration
-suite back to `core`'s own source), and, for unit tests specifically, resilience to one module's
-test failure discarding every other module's data:
+`jacoco-maven-plugin`'s instrumentation/report executions live behind an opt-in `coverage` Maven
+profile (see the root `pom.xml`), not the default build, so `test-unit`/`test-integration-*` do
+*not* collect coverage data on their own. The targets below activate that profile and each write
+their own `target/jacoco.exec`. What's missing without them is a combined, cross-module view (e.g.
+attributing coverage `core` gets *through* the integration suite back to `core`'s own source), and,
+for unit tests specifically, resilience to one module's test failure discarding every other
+module's data:
 
-- `make test-unit-coverage` runs the same modules as `make test-unit`, but as one `mvn`
-  invocation per module instead of a single reactor-wide one. This matters because in a single
-  `mvn test` reactor build, a test failure in `core` makes Maven skip every module that depends on
-  it (`query-builder`, `mapper-runtime`, ...) too -- losing their coverage data along with core's,
-  regardless of `-fae`/`-fn`, since those flags only rescue *independent* modules, not ones with
-  a real dependency on the failed one.
+- `make test-unit-coverage` runs the same modules as `make test-unit` -- one reactor-wide `mvn
+  test` -- but with `-Dmaven.test.failure.ignore=true`. Without that, a test failure in `core`
+  would make Maven skip every module that depends on it (`query-builder`, `mapper-runtime`, ...)
+  too -- losing their coverage data along with core's, regardless of `-fae`/`-fn`, since those
+  flags only rescue *independent* modules, not ones with a real dependency on the failed one.
+  Because that flag also makes surefire swallow the failure (so Maven's own exit code no longer
+  reflects it), the target reads pass/fail back from the surefire XML reports afterwards.
 - `make test-integration-scylla` / `make test-integration-cassandra` need no coverage-specific
-  variant: `maven-failsafe-plugin` already separates running integration tests (`integration-test`
-  phase, which always completes) from failing the build on their results (`verify` phase), so a
-  test failure there was never able to lose coverage data in the first place.
+  variant beyond passing `MAVEN_EXTRA_ARGS=-Pcoverage` to activate the profile: `maven-failsafe-plugin`
+  already separates running integration tests (`integration-test` phase, which always completes)
+  from failing the build on their results (`verify` phase), so a test failure there was never able
+  to lose coverage data in the first place.
 - `make coverage-report` merges whatever the above collected into one cross-module report, via a
   dedicated `coverage-report` module that depends on the others and runs
   `jacoco:report-aggregate`. Run whichever of `test-unit-coverage` / `test-integration-scylla` /
-  `test-integration-cassandra` you want measured first, then this. It prints a per-module summary
-  and writes an HTML report to `coverage-report/target/site/jacoco-aggregate/index.html` (open it
-  in a browser for a line-by-line view), plus `jacoco.xml`/`jacoco.csv` alongside it.
-- `make clean-coverage` deletes every module's `jacoco.exec` and the generated report.
+  `test-integration-cassandra` you want measured first, then this (it fails fast if it finds no
+  `jacoco.exec` anywhere, rather than rendering a confident-looking but empty report). It writes an
+  HTML report to `coverage-report/target/site/jacoco-aggregate/index.html` (open it in a browser
+  for a line-by-line view), plus `jacoco.xml`/`jacoco.csv` alongside it.
+- `make clean-coverage` deletes every module's `jacoco.exec` and `target/site/jacoco/`, plus the
+  aggregate report.
 
-Note: the surefire/failsafe configs in `core`, `integration-tests`, and `distribution-tests`
-previously set `<argLine>` to just their own JVM flags (e.g. `${mockitoopens.argline}`), which
-silently discarded the `-javaagent` flag `jacoco:prepare-agent` injects into the `argLine`
-property -- coverage was being collected for every *other* module, but not these three. They now
-combine both via Maven's deferred-property syntax: `<argLine>@{argLine} ${mockitoopens.argline}</argLine>`
-(`@{...}` is necessary rather than `${...}` because `jacoco:prepare-agent` sets `argLine` at
-build-execution time, after the POM's own `${...}` references would already have been resolved).
+Note: the surefire/failsafe configs in `core` and `integration-tests` previously set `<argLine>` to
+just their own JVM flags (e.g. `${mockitoopens.argline}`), which silently discarded the
+`-javaagent` flag `jacoco:prepare-agent` injects into the `argLine` property -- coverage was being
+collected for every *other* module, but not these two. They now combine both via Maven's
+deferred-property syntax: `<argLine>@{argLine} ${mockitoopens.argline}</argLine>` (`@{...}` is
+necessary rather than `${...}` because `jacoco:prepare-agent` sets `argLine` at build-execution
+time, after the POM's own `${...}` references would already have been resolved). `argLine` itself
+is declared, empty, as a root `pom.xml` property so that combination resolves to something even
+outside the `coverage` profile, where `jacoco:prepare-agent` never runs to give it a real value.
+(`distribution-tests` has no `src` of its own, so surefire never forks there either way; it was
+left out of this.)
 
 The Makefile automatically installs the shaded Guava dependency and, for integration tests, bootstraps the appropriate CCM toolchain and raises kernel `aio-max-nr` when required. If a target fails because the toolchain is missing, rerun after installing the prerequisites highlighted in the target output.

@@ -30,11 +30,20 @@ on:
       - ".gitignore"
   workflow_dispatch:
 
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   coverage:
     name: Measure code coverage
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
+    env:
+      # Overrides the Makefile's own default (mvn -B -X -ntp): -X's verbose
+      # debug logging isn't useful here and made this job's log ~150MB.
+      MVNCMD: mvn -B -ntp
 
     steps:
       - name: Checkout source
@@ -59,71 +68,147 @@ jobs:
         with:
           python-version: '3.13'
 
-      # From here on, every step uses `if: always()`: a failing test must not
-      # skip the integration suite or report generation -- a broken test
-      # would otherwise leave no coverage output at all to diagnose it with.
+      # From here on, every step uses `if: ${{ !cancelled() }}`: a failing
+      # test must not skip the integration suite or report generation -- a
+      # broken test would otherwise leave no coverage output at all to
+      # diagnose it with. Unlike always(), this still lets a cancelled run
+      # (e.g. superseded by a newer push, see the concurrency group above)
+      # stop instead of running out the rest of this 60-minute job.
       # test-unit-coverage (rather than test-unit) tests each module as its
       # own `mvn` invocation for the same reason: in one reactor-wide `mvn
       # test`, a failure in core would make Maven skip every module that
       # depends on it too, losing their coverage data along with core's own.
       - name: Run unit tests with coverage
-        if: always()
+        if: ${{ !cancelled() }}
         run: make test-unit-coverage
 
+      - name: Upload unit test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-unit-test-results
+          path: "*/**/target/*-reports/*.xml"
+
+      - name: Parse unit test results
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        if: ${{ !cancelled() }}
+        with:
+          check_name: Unit tests report (coverage)
+          require_tests: true
+          report_paths: "*/**/target/*-reports/TEST-*.xml"
+          follow_symlink: true
+          detailed_summary: true
+          updateComment: false
+          skip_annotations: true
+
       - name: Install ScyllaDB CCM
-        if: always()
+        if: ${{ !cancelled() }}
         run: make install-scylla-ccm
 
       - name: Get scylla version
         id: scylla-version
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: make resolve-scylla-version
 
+      # Guarded on a non-empty version: if the step above failed, always()
+      # (now !cancelled()) still runs these, and an empty version degrades
+      # the cache key to "ccm-scylla-Linux-" -- the save step below would
+      # then write a real (and immutable) cache entry under that generic
+      # key, which a later, unrelated failed run would restore and treat as
+      # a legitimate cache hit.
       - name: Pull CCM image from the cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        if: always()
+        if: ${{ !cancelled() && steps.scylla-version.outputs.value != '' }}
         id: ccm-cache
         with:
           path: ~/.ccm/scylla-repository
           key: ccm-scylla-${{ runner.os }}-${{ steps.scylla-version.outputs.value }}
 
       - name: Download Scylla (${{ steps.scylla-version.outputs.value }}) image
-        if: always() && steps.ccm-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.scylla-version.outputs.value != '' && steps.ccm-cache.outputs.cache-hit != 'true' }}
         env:
           SCYLLA_VERSION_RESOLVED: ${{ steps.scylla-version.outputs.value }}
         run: make download-scylla
 
       - name: Save CCM image into the cache
-        if: always() && steps.ccm-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.scylla-version.outputs.value != '' && steps.ccm-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.ccm/scylla-repository
           key: ccm-scylla-${{ runner.os }}-${{ steps.scylla-version.outputs.value }}
 
+      # -Pcoverage opts this run into jacoco instrumentation (see the
+      # "coverage" profile in the parent pom) -- the 12 IT lanes the
+      # "Scylla ITs"/"Cassandra ITs" jobs in tests@v1.yml run stay
+      # uninstrumented. continue-on-error: true because this exercises the
+      # same LATEST/JDK17 suite that already gates the build as one of
+      # those "Scylla ITs" jobs; a known flake in it should cost this
+      # coverage job some data, not turn it red on a signal that job
+      # already reports on.
       - name: Run integration tests with coverage
-        if: always()
+        id: run-integration-tests
+        if: ${{ !cancelled() && steps.scylla-version.outputs.value != '' }}
+        continue-on-error: true
         env:
           SCYLLA_VERSION_RESOLVED: ${{ steps.scylla-version.outputs.value }}
+          MAVEN_EXTRA_ARGS: -Pcoverage
         run: make test-integration-scylla
 
+      - name: Upload integration test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-integration-test-results
+          path: "*/**/target/*-reports/*.xml"
+
+      - name: Parse integration test results
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        if: ${{ !cancelled() }}
+        with:
+          check_name: Integration tests report (coverage)
+          require_tests: true
+          report_paths: "*/**/target/*-reports/TEST-*.xml"
+          follow_symlink: true
+          detailed_summary: true
+          updateComment: false
+          skip_annotations: true
+
       - name: Generate coverage report
-        if: always()
-        run: make coverage-report MVNCMD="mvn -B -ntp"
+        if: ${{ !cancelled() }}
+        run: make coverage-report
 
       - name: Publish coverage summary
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           {
             echo '## Coverage report'
             echo '```'
-            awk -F, 'NR>1 {missed+=$8; covered+=$9} END {total=missed+covered; if (total>0) printf "Line coverage: %d/%d (%.1f%%)\n", covered, total, 100*covered/total; else print "No coverage data"}' coverage-report/target/site/jacoco-aggregate/jacoco.csv
+            XML=coverage-report/target/site/jacoco-aggregate/jacoco.xml
+            if [ -f "$XML" ]; then
+              # The last top-level <counter type="LINE"> in a jacoco XML
+              # report is the grand total across every aggregated module;
+              # earlier ones are per-package/per-class rollups. Read from
+              # the XML rather than the sibling csv: the csv is unquoted,
+              # so a package/class name containing a comma shifts its
+              # columns.
+              COUNTER=$(grep -o '<counter type="LINE"[^/]*/>' "$XML" | tail -1 || true)
+              MISSED=$(printf '%s' "$COUNTER" | grep -oP 'missed="\K[0-9]+' || true)
+              COVERED=$(printf '%s' "$COUNTER" | grep -oP 'covered="\K[0-9]+' || true)
+              if [ -n "$MISSED" ] && [ -n "$COVERED" ] && [ "$((MISSED + COVERED))" -gt 0 ]; then
+                awk -v m="$MISSED" -v c="$COVERED" 'BEGIN { t = m + c; printf "Line coverage: %d/%d (%.1f%%)\n", c, t, 100*c/t }'
+              else
+                echo 'No coverage data'
+              fi
+            else
+              echo 'No coverage data'
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report

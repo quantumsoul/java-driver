@@ -105,12 +105,32 @@
           </execution>
           <execution>
             <id>report-aggregate</id>
-            <phase>verify</phase>
+            <!--
+                Not bound to a phase: this module sits in the default
+                reactor (root pom's <modules>), so a phase binding here
+                would render a report during any plain `mvn install` /
+                `mvn verify` across the whole reactor, before any test had
+                run. The Makefile's coverage-report target invokes the
+                goal directly instead.
+            -->
+            <phase>none</phase>
             <goals>
               <goal>report-aggregate</goal>
             </goals>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-install-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+      <plugin>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
       </plugin>
     </plugins>
   </build>

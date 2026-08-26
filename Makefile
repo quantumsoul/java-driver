@@ -257,29 +257,34 @@ fix:
 test-unit: .install-guava-shaded
 	$(MVNCMD) test -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true
 
-# Modules with real unit tests. Kept as an explicit list (rather than e.g.
-# "every module but X") since test-unit-coverage below relies on it precisely
-# to sidestep Maven's reactor dependency rules.
-UNIT_TEST_MODULES := core query-builder mapper-runtime mapper-processor metrics/micrometer metrics/microprofile
-
-# Unlike test-unit, this tests each module as its own `mvn` invocation instead
-# of one reactor-wide `mvn test`. That matters here specifically: in a single
-# reactor build, if core's tests fail, Maven skips every module that depends
-# on core (query-builder, mapper-runtime, ...) *regardless* of -fae/-fn --
-# those flags only rescue independent modules, not ones with a real
-# dependency on the failed one. Testing each module separately, against
-# core's already-installed (.install-all-modules) artifact, means one
-# module's test failure can only cost that module's own coverage data, not
-# every other module's too.
-test-unit-coverage: .install-all-modules
-	@status=0
-	for module in $(UNIT_TEST_MODULES); do
-		$(MVNCMD) test -pl $$module -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true || status=1
-	done
+# Same modules as test-unit (the whole reactor, so no hardcoded module list
+# to drift out of sync), as one reactor-wide `mvn test` rather than a
+# per-module invocation, but with -Dmaven.test.failure.ignore=true: without
+# it, a test failure in core would make Maven skip every module that
+# depends on it (query-builder, mapper-runtime, ...) *regardless* of
+# -fae/-fn -- those flags only rescue independent modules, not ones with a
+# real dependency on the failed one -- losing their coverage data along
+# with core's. maven.test.failure.ignore makes surefire itself swallow the
+# failure so the reactor keeps going, which also means Maven's own exit
+# code no longer reflects whether tests passed, so it's read back here from
+# the surefire XML reports every module still writes on failure.
+#
+# Deletes stale jacoco.exec files first: jacoco appends to them by default,
+# so re-running after editing a source file would otherwise merge coverage
+# for two versions of the same class (surfaced as a CRC mismatch, reported
+# as uncovered).
+test-unit-coverage: .install-guava-shaded
+	@find . -name jacoco.exec -delete
+	status=0
+	$(MVNCMD) test -Pcoverage -Dmaven.test.failure.ignore=true -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true || status=1
+	if find . -path '*/target/surefire-reports/TEST-*.xml' -exec grep -lE 'failures="[1-9][0-9]*"|errors="[1-9][0-9]*"' {} \; 2>/dev/null | grep -q .; then
+		status=1
+	fi
 	exit $$status
 
 test-integration-scylla: .install-all-modules .prepare-scylla-ccm resolve-scylla-version .prepare-environment-update-aio-max-nr
-	@if [[ -z "$${SCYLLA_VERSION_RESOLVED}" ]]; then
+	@rm -f integration-tests/target/jacoco.exec
+	if [[ -z "$${SCYLLA_VERSION_RESOLVED}" ]]; then
 		SCYLLA_VERSION_RESOLVED=`cat '${SCYLLA_VERSION_FILE}'`
 	fi
 	if [[ -z "$${SCYLLA_VERSION_RESOLVED}" ]]; then
@@ -298,22 +303,31 @@ test-integration-cassandra: .install-all-modules .prepare-scylla-ccm resolve-cas
 	fi
 	mvn -B -e verify -pl integration-tests -Dccm.version=$${CASSANDRA_VERSION_RESOLVED} -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true $(MAVEN_EXTRA_ARGS)
 
-# jacoco-maven-plugin's prepare-agent/report executions (bound repo-wide by the
-# parent pom) already instrument test-unit/test-integration-* runs -- run
-# whichever of those you want measured first, then this to merge and render
-# them. It rebuilds the reactor (-am) to resolve coverage-report's
-# dependencies, but -DskipTests means that rebuild does not re-run (or
-# overwrite the coverage data from) any module's tests.
+# jacoco-maven-plugin's prepare-agent/report executions (see the "coverage"
+# profile in the parent pom) already instrument test-unit-coverage/
+# test-integration-* runs -- run whichever of those you want measured
+# first, then this to merge and render them. It rebuilds the reactor (-am)
+# to resolve coverage-report's dependencies, but -DskipTests means that
+# rebuild does not re-run (or overwrite the coverage data from) any
+# module's tests. report-aggregate is requested as its own goal (not just
+# implied by `verify`) because it's unbound from the lifecycle in
+# coverage-report/pom.xml precisely so a plain `mvn verify`/`mvn install`
+# elsewhere in the reactor doesn't also render it.
 #
 # .PHONY here (unlike the rest of this file) because these target names
 # collide with real paths -- coverage-report/ is the module's own directory --
 # so make would otherwise treat the target as already up to date and skip it.
 .PHONY: coverage-report clean-coverage
-coverage-report:
-	$(MVNCMD) verify -pl coverage-report -am -DskipTests -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true
+coverage-report: .install-guava-shaded
+	@if ! find . -name jacoco.exec -not -path './coverage-report/*' | grep -q .; then
+		echo "No jacoco.exec files found -- run test-unit-coverage and/or test-integration-scylla first"
+		exit 1
+	fi
+	$(MVNCMD) verify jacoco:report-aggregate -pl coverage-report -am -DskipTests -Dfmt.skip=true -Dclirr.skip=true -Danimal.sniffer.skip=true
 
 clean-coverage:
 	find . -name jacoco.exec -delete
+	find . -type d -path '*/target/site/jacoco' -exec rm -rf {} +
 	rm -rf coverage-report/target/site
 
 check-no-compile-warnings:
