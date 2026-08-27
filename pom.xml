@@ -111,6 +111,17 @@
     <release.autopublish>false</release.autopublish>
     <pushChanges>false</pushChanges>
     <mockitoopens.argline/>
+    <!--
+        Declared empty for the same reason as argLine above: the JDK
+        profiles below only set this from JDK 14 onwards, so on JDK 11 it
+        is otherwise undefined, and integration-tests' failsafe argLine
+        combines it with @{argLine} rather than referencing it alone. A
+        lone ${...} to an undefined property resolves to nothing, but in a
+        composite value Maven leaves the literal text, which the forked
+        JVM then rejects ("Could not find or load main class
+        ${blockhound.argline}").
+    -->
+    <blockhound.argline/>
     <api.plumber.skip>false</api.plumber.skip>
   </properties>
   <dependencyManagement>
